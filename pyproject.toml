@@ -1,0 +1,61 @@
+[build-system]
+build-backend = "hatchling.build"
+requires = [ "hatch-vcs", "hatchling" ]
+
+[project]
+name = "meltano-state-backend-clickhouse"
+description = "Meltano State Backend for ClickHouse"
+readme = "README.md"
+license = "MIT"
+license-files = [
+  "LICENSE",
+]
+requires-python = ">=3.10"
+classifiers = [
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+]
+dynamic = [ "version" ]
+dependencies = [
+  "clickhouse-connect>=0.7",
+  "meltano>=3.7",
+]
+[project.entry-points."meltano.settings"]
+host = "meltano_state_backend_clickhouse.backend:CLICKHOUSE_HOST"
+port = "meltano_state_backend_clickhouse.backend:CLICKHOUSE_PORT"
+database = "meltano_state_backend_clickhouse.backend:CLICKHOUSE_DATABASE"
+user = "meltano_state_backend_clickhouse.backend:CLICKHOUSE_USER"
+password = "meltano_state_backend_clickhouse.backend:CLICKHOUSE_PASSWORD"
+secure = "meltano_state_backend_clickhouse.backend:CLICKHOUSE_SECURE"
+schema = "meltano_state_backend_clickhouse.backend:CLICKHOUSE_SCHEMA"
+table = "meltano_state_backend_clickhouse.backend:CLICKHOUSE_TABLE"
+[project.entry-points."meltano.state_backends"]
+clickhouse = "meltano_state_backend_clickhouse.backend:ClickhouseStateStoreManager"
+[[project.maintainers]]
+name = "Matatika"
+email = "hello@matatika.com"
+[project.urls]
+Documentation = "https://github.com/Matatika/meltano-state-backend-clickhouse"
+Source = "https://github.com/Matatika/meltano-state-backend-clickhouse"
+Issues = "https://github.com/Matatika/meltano-state-backend-clickhouse/issues"
+
+[dependency-groups]
+dev = [
+  { include-group = "tests" },
+]
+tests = [
+  "pytest>=8",
+  "testcontainers[clickhouse]>=4.8",
+]
+
+[tool.hatch.version]
+fallback-version = "0.0.0.dev0"
+source = "vcs"
+
+[tool.pytest.ini_options]
+addopts = [ "-ra" ]
+log_level = "INFO"
+testpaths = [ "tests" ]
