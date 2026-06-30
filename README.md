@@ -10,7 +10,7 @@ and MSSQL state backends.
 ## Install
 
 ```sh
-pip install "meltano-state-backend-clickhouse @ git+https://github.com/Matatika/meltano-state-backend-clickhouse.git"
+pip install "meltano-state-backend-clickhouse @ git+https://github.com/Meltano/meltano-state-backend-clickhouse.git"
 ```
 
 ## Configure

@@ -38,9 +38,9 @@ clickhouse = "meltano_state_backend_clickhouse.backend:ClickhouseStateStoreManag
 name = "Matatika"
 email = "hello@matatika.com"
 [project.urls]
-Documentation = "https://github.com/Matatika/meltano-state-backend-clickhouse"
-Source = "https://github.com/Matatika/meltano-state-backend-clickhouse"
-Issues = "https://github.com/Matatika/meltano-state-backend-clickhouse/issues"
+Documentation = "https://github.com/meltano/meltano-state-backend-clickhouse"
+Source = "https://github.com/meltano/meltano-state-backend-clickhouse"
+Issues = "https://github.com/meltano/meltano-state-backend-clickhouse/issues"
 
 [dependency-groups]
 dev = [
