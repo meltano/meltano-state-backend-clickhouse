@@ -278,6 +278,12 @@ class ClickhouseStateStoreManager(StateStoreManager):
             ORDER BY state_id
             """,  # noqa: S608
         )
+        # A TTL on locked_at is a backstop: if a lock holder dies without
+        # releasing, the row is reaped by background merges after the stale
+        # window even if no one else contends the same state_id (which is what
+        # otherwise triggers the active DELETE cleanup). It does not replace the
+        # active cleanup — TTL is merge-time / best-effort, so acquire_lock still
+        # clears stale rows synchronously for liveness within the window.
         self.client.command(
             f"""
             CREATE TABLE IF NOT EXISTS {self.lock_table} (
@@ -286,6 +292,7 @@ class ClickhouseStateStoreManager(StateStoreManager):
                 locked_at DateTime DEFAULT now()
             ) ENGINE = ReplacingMergeTree(locked_at)
             ORDER BY state_id
+            TTL locked_at + INTERVAL {STALE_LOCK_SECONDS} SECOND
             """,  # noqa: S608
         )
 
@@ -434,9 +441,15 @@ class ClickhouseStateStoreManager(StateStoreManager):
         acquired = False
 
         while seconds_waited < LOCK_TIMEOUT_SECONDS:
-            self._cleanup_stale_locks()
+            holder = self._lock_held_by(state_id)
+            if holder is not None:
+                # A lock row exists — it may be stale. Only now pay for the
+                # DELETE (the common uncontended path skips it entirely), then
+                # re-read to see if the slot is free.
+                self._cleanup_stale_locks()
+                holder = self._lock_held_by(state_id)
 
-            if self._lock_held_by(state_id) is None:
+            if holder is None:
                 self.client.insert(
                     f"{self.schema}.{self.table}_lock",
                     [[state_id, lock_id]],

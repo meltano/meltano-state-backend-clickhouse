@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import uuid
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from meltano.core.state_store.base import MeltanoState
@@ -79,3 +80,19 @@ def test_lock_round_trip_and_update(manager: ClickhouseStateStoreManager) -> Non
     # update() acquires the lock internally
     manager.update(MeltanoState(state_id=sid, partial_state={}, completed_state={"v": 9}))
     assert manager.get(sid).completed_state == {"v": 9}
+
+
+def test_stale_lock_is_reclaimed(manager: ClickhouseStateStoreManager) -> None:
+    # A lock left behind by a crashed holder (locked_at older than the stale
+    # window) must be reclaimable — acquire_lock cleans it up synchronously
+    # rather than relying on the TTL backstop (merge-time / best-effort).
+    sid = "dev:stale"
+    stale_at = datetime.now(tz=timezone.utc) - timedelta(hours=1)
+    manager.client.insert(
+        f"{manager.schema}.{manager.table}_lock",
+        [[sid, "dead-holder", stale_at]],
+        column_names=["state_id", "lock_id", "locked_at"],
+    )
+    assert manager._lock_held_by(sid) == "dead-holder"  # noqa: SLF001
+    with manager.acquire_lock(sid, retry_seconds=1):
+        pass  # stale lock reclaimed, acquired and released without error
