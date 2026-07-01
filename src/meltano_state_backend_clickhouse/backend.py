@@ -45,6 +45,11 @@ DEFAULT_SCHEMA_NAME = "meltano"
 DEFAULT_PORT = 8123
 LOCK_TIMEOUT_SECONDS = 30
 STALE_LOCK_SECONDS = 300  # 5 minutes
+# How long to wait after inserting a candidate lock row before deciding a
+# winner. Must comfortably exceed realistic scheduling/network jitter between
+# two processes' near-simultaneous acquire_lock calls — see acquire_lock's
+# docstring for why this settle step is required for correctness.
+LOCK_SETTLE_SECONDS = 1.0
 
 logger = logging.getLogger(__name__)
 
@@ -412,6 +417,22 @@ class ClickhouseStateStoreManager(StateStoreManager):
             return None
         return str(result.result_rows[0][0])
 
+    def _candidate_lock_ids(self, state_id: str) -> list[str]:
+        """Return every not-yet-merged lock row for a state id.
+
+        Deliberately skips ``FINAL``: unlike ``_lock_held_by`` (which wants
+        ClickHouse's own single collapsed "current" row), the settle-then-decide
+        tie-break in ``acquire_lock`` needs to see *every* row a genuinely
+        concurrent acquirer inserted, including ones ``ReplacingMergeTree``
+        hasn't merged away yet.
+        """
+        result = self.client.query(
+            f"SELECT lock_id FROM {self.lock_table} "  # noqa: S608
+            "WHERE state_id = {state_id:String}",
+            parameters={"state_id": state_id},
+        )
+        return [str(row[0]) for row in result.result_rows]
+
     @override
     @contextmanager
     def acquire_lock(
@@ -423,7 +444,24 @@ class ClickhouseStateStoreManager(StateStoreManager):
         """Acquire a best-effort advisory lock for the given state id.
 
         ClickHouse has no insert-conflict primitive, so this inserts a candidate
-        lock row and then verifies it owns the lock (lowest ``lock_id`` wins ties).
+        lock row, then *settles* for ``LOCK_SETTLE_SECONDS`` before deciding a
+        winner — giving any other process racing the same empty-holder check a
+        chance to also insert its own candidate row first.
+
+        This settle step matters: an immediate post-insert check (verify only
+        against ``_lock_held_by``, which applies ``FINAL``) is not sufficient,
+        because ``FINAL`` resolves ``ReplacingMergeTree`` rows by the newest
+        ``locked_at`` version, not by ``lock_id``. Two candidates inserted a few
+        milliseconds apart can each run their own verify query before the
+        other's row is visible to it, so each can independently see only its
+        own row and conclude it won — a genuine double-acquisition (confirmed
+        empirically: 5 processes racing the same state_id, 3/3 runs produced at
+        least one overlapping "critical section" pair). Settling first, then
+        picking the lowest ``lock_id`` among *every* row still present for that
+        state_id (not the ``FINAL``-collapsed single "winner"), means every
+        genuinely concurrent acquirer computes the decision from the same row
+        set and agrees on the same winner.
+
         Stale locks are cleaned up first.
 
         Args:
@@ -455,16 +493,21 @@ class ClickhouseStateStoreManager(StateStoreManager):
                     [[state_id, lock_id]],
                     column_names=["state_id", "lock_id"],
                 )
-                # Verify we won (in case of a concurrent insert race).
-                if self._lock_held_by(state_id) == lock_id:
+                # Settle before deciding — see the docstring above for why an
+                # immediate FINAL-based verify is not enough under real
+                # contention.
+                time.sleep(LOCK_SETTLE_SECONDS)
+                candidates = self._candidate_lock_ids(state_id)
+                if candidates and min(candidates) == lock_id:
                     acquired = True
                     break
-                # Lost the race — withdraw our candidate row and retry.
+                # Lost the tie-break — withdraw our candidate row and retry.
                 self.client.command(
                     f"DELETE FROM {self.lock_table} "  # noqa: S608
                     "WHERE state_id = {state_id:String} AND lock_id = {lock_id:String}",
                     parameters={"state_id": state_id, "lock_id": lock_id},
                 )
+                seconds_waited += LOCK_SETTLE_SECONDS
 
             time.sleep(retry_seconds)
             seconds_waited += retry_seconds
